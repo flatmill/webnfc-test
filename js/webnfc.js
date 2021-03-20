@@ -1,161 +1,194 @@
 (function (window) {
     'use struct';
 
-    /** true if NDEFReader is active. */
-    var _isActive = false;
+    /** NDEFReader object */
+    var _ndef = null;
 
-    /** Controller for abort scan/write. */
+    /** true if supports Web NFC */
+    var _isSupported = 'NDEFReader' in window;
+    if (_isSupported) {
+        try {
+            _ndef = new window.NDEFReader();
+        } catch (error) {
+            _isSupported = false;
+        }
+    }
+
+    /** 'reading' listener of _ndef */
+    var _readingListener = null;
+
+    /** 'readingerror' listener of _ndef */
+    var _readingErrorListener = null;
+
+    /** true if NDEFReader is scanning. */
+    var _isScanning = false;
+
+    /** Controller for abort scan. */
     var _scanController = null;
 
-    /**
-     * Check if Web NFC is supported
-     * @returns true if Web NFC is supported
-     */
-    function isSupported() {
-        return 'NDEFReader' in window;
-    }
+    /** Entity of WebNFC.read function */
+    var _readfunc = null;
 
-    /**
-     * Start scan NFC Tag.
-     * @param {function} successful Function called on success
-     * @param {function} failed Function called on failure
-     */
-    function scan(successful, failed) {
-        if (_isActive) {
-            setTimeout(function () {
-                failed(new Error('In use by another task.'));
-            }, 0);
-            return;
-        }
-        _isActive = true;
-        if (!isSupported()) {
-            setTimeout(function () {
-                _scanFailed(failed, new Error('Web NFC is not supported.'));
-            }, 0);
-            return;
-        }
-        _scanController = new AbortController();
-        _scanController.signal.onabort = function () {
-            _scanFailed(failed, new Error('Aborted.'));
-        };
-        var ndef = new window.NDEFReader();
-        ndef.addEventListener('readingerror', function () {
-            _scanFailed(failed, new Error('Cannot read data from the NFC tag.'));
-        });
-        ndef.addEventListener('reading', function (event) {
-            console.log(event);
-            _scanSuccessful(successful, event.serialNumber, event.message);
-        });
-        ndef.scan({ signal: _scanController.signal }).catch(function (error) {
-            _scanFailed(failed, error);
-        });
-    }
+    /** Entity of WebNFC.write function */
+    var _writefunc = null;
 
-    function _scanFailed(failed, error) {
-        if (_isActive) {
-            _isActive = false;
-            _scanController = null;
-            failed(error);
-        }
-    }
-
-    function _scanSuccessful(successful, serialNumber, message) {
-        if (_isActive) {
-            _isActive = false;
-            _scanController = null;
-            successful({ serialNumber: serialNumber, message: message });
-        }
-    }
-
-    function write(validate, successful, failed) {
-        if (_isActive) {
-            setTimeout(function () {
-                failed(new Error('In use by another task.'));
-            }, 0);
-            return;
-        }
-        _isActive = true;
-        if (!isSupported()) {
-            setTimeout(function () {
-                _writeFailed(failed, new Error('Web NFC is not supported.'));
-            }, 0);
-            return;
-        }
-        _scanController = new AbortController();
-        _scanController.signal.onabort = function () {
-            _writeFailed(failed, new Error('Aborted.'));
-        };
-        var ndef = new window.NDEFReader();
-        ndef.addEventListener('readingerror', function () {
-            _writeFailed(failed, new Error('Cannot read data from the NFC tag.'));
-        });
-        ndef.addEventListener('reading', function (event) {
-            var result = validate(event.serialNumber, event.message);
-            if (!result) {
-                _writeFailed(failed, new Error('Cannot read data from the NFC tag.'));
-            } else {
-                var message = result.message || null;
-                var overwrite = !!(result.overwrite || false);
-                _scanController = new AbortController();
-                _scanController.signal.onabort = function () {
-                    _writeFailed(failed, new Error('Aborted.'));
-                };
-                ndef.write(message, { overwrite: overwrite, signal: _scanController.signal })
-                    .then(function () {
-                        _writeSuccessful(successful);
-                    })
-                    .catch(function (error) {
-                        _writeFailed(failed, error);
-                    });
+    // Implement entities of WebNFC function
+    if (_isSupported) {
+        var finallyScan = function () {
+            _isScanning = false;
+            if (_readingListener) {
+                _ndef.removeEventListener('reading', _readingListener);
             }
-        });
-        ndef.scan({ signal: _scanController.signal }).catch(function (error) {
-            _writeFailed(failed, error);
-        });
-    }
-
-    function _writeFailed(failed, error) {
-        if (_isActive) {
-            _isActive = false;
-            _scanController = null;
-            failed(error);
-        }
-    }
-
-    function _writeSuccessful(successful) {
-        if (_isActive) {
-            _isActive = false;
-            _scanController = null;
-            successful();
-        }
-    }
-
-    /**
-     * Check if NFC tag is being scanned
-     * @returns true if NFC tag is being scanned
-     */
-    function isScanning() {
-        return !!_isActive;
-    }
-
-    /**
-     * Abort scanning NFC tag
-     */
-    function abort() {
-        if (_isActive) {
-            if (_scanController) {
-                _scanController.abort();
+            if (_readingErrorListener) {
+                _ndef.removeEventListener('readingerror', _readingErrorListener);
             }
-        }
+            _ndef = null;
+            _scanController = null;
+            _readingListener = _readingErrorListener = null;
+        };
+        var callbackFailed = function (failed, error) {
+            if (_isScanning) {
+                finallyScan();
+                failed(error);
+            }
+        };
+
+        // define read function
+        _readfunc = function (successful, failed) {
+            if (_isScanning) {
+                setTimeout(function () {
+                    failed(new Error('In use by another task.'));
+                }, 0);
+                return;
+            }
+            _isScanning = true;
+            _ndef = new window.NDEFReader();
+            _scanController = new AbortController();
+            _scanController.signal.onabort = function () {
+                callbackFailed(failed, new Error('Aborted reading NFC tag.'));
+            };
+            _readingErrorListener = function () {
+                callbackFailed(failed, new Error('Cannot read data from the NFC tag.'));
+            };
+            _readingListener = function (event) {
+                console.log(event);
+                if (_isScanning) {
+                    _isScanning = false;
+                    finallyScan();
+                    successful({ serialNumber: event.serialNumber, message: event.message });
+                }
+            };
+            _ndef.addEventListener('readingerror', _readingErrorListener);
+            _ndef.addEventListener('reading', _readingListener);
+            _ndef.scan({ signal: _scanController.signal }).catch(function (error) {
+                callbackFailed(failed, error);
+            });
+        };
+
+        // define write function
+        _writefunc = function (validate, successful, failed) {
+            if (_isScanning) {
+                setTimeout(function () {
+                    failed(new Error('In use by another task.'));
+                }, 0);
+                return;
+            }
+            _isScanning = true;
+            _ndef = new window.NDEFReader();
+            _scanController = new AbortController();
+            _scanController.signal.onabort = function () {
+                callbackFailed(failed, new Error('Aborted writing NFC tag.'));
+            };
+            _readingErrorListener = function () {
+                callbackFailed(failed, new Error('Cannot validate data from the NFC tag.'));
+            };
+            _readingListener = function (event) {
+                console.log(event);
+                var result = validate(event.serialNumber, event.message);
+                if (!result) {
+                    callbackFailed(failed, new Error('NFC tag validation failed.'));
+                } else {
+                    var message = result.message || null;
+                    var overwrite = !!(result.overwrite || false);
+                    finallyScan();
+                    _ndef = new window.NDEFReader();
+                    _scanController = new AbortController();
+                    _scanController.signal.onabort = function () {
+                        callbackFailed(failed, new Error('Aborted writing NFC tag.'));
+                    };
+                    _ndef
+                        .write(message, { overwrite: overwrite, signal: _scanController.signal })
+                        .then(function () {
+                            if (_isScanning) {
+                                _isScanning = false;
+                                finallyScan();
+                                successful();
+                            }
+                        })
+                        .catch(function (error) {
+                            callbackFailed(failed, error);
+                        });
+                }
+            };
+            _ndef.addEventListener('readingerror', _readingErrorListener);
+            _ndef.addEventListener('reading', _readingListener);
+            _ndef.scan({ signal: _scanController.signal }).catch(function (error) {
+                callbackFailed(failed, error);
+            });
+        };
+    } else {
+        _readfunc = function (successful, failed) {
+            setTimeout(function () {
+                failed(new Error('Web NFC is not supported.'));
+            }, 0);
+        };
+        _writefunc = function (validate, successful, failed) {
+            setTimeout(function () {
+                failed(new Error('Web NFC is not supported.'));
+            }, 0);
+        };
     }
 
-    window.WebNFC = {
-        isSupported: isSupported,
-        scan: scan,
-        write: write,
-        isScanning: isScanning,
-        abort: abort,
+    var webnfc = {
+        /**
+         * Check if Web NFC is supported
+         * @returns true if Web NFC is supported
+         */
+        isSupported: function () {
+            return _isSupported;
+        },
+        /**
+         * Start read NFC Tag.
+         * @param {function} successful Function called on success
+         * @param {function} failed Function called on failure
+         */
+        read: _readfunc,
+        /**
+         * Start write NFC Tag.
+         * @param {function} validate Function called when validating NFC tags
+         * @param {function} successful Function called on success
+         * @param {function} failed Function called on failure
+         */
+        write: _writefunc,
+        /**
+         * Check if NFC tag is being scanned
+         * @returns true if NFC tag is being scanned
+         */
+        isScanning: function () {
+            return _isScanning;
+        },
+        /**
+         * Abort scanning NFC tag
+         */
+        abort: function () {
+            if (_isScanning) {
+                if (_scanController) {
+                    _scanController.abort();
+                }
+            }
+        },
     };
+    window.WebNFC = webnfc;
 })(window);
 
 function DataViewToString(dataview, isutf8) {
@@ -195,7 +228,7 @@ window.addEventListener('DOMContentLoaded', function () {
     document.getElementById('scan').addEventListener('click', function () {
         document.getElementById('scan_status').innerHTML = ' - Scanning...';
         document.getElementById('scan_result').innerText = '';
-        WebNFC.scan(
+        WebNFC.read(
             function (data) {
                 var records = data.message.records;
                 var recordsLen = records.length;
