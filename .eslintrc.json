@@ -1,0 +1,12 @@
+{
+    "env": {
+        "browser": true
+    },
+    "extends": ["eslint:recommended", "plugin:prettier/recommended"],
+    "rules": {
+        "no-undef": "error",
+        "semi": ["error", "always"],
+        "quotes": ["error", "single"],
+        "indent": ["error", 4]
+    }
+}

@@ -1,0 +1,6 @@
+package.json
+package-lock.json
+*.min.js
+*.min.css
+node_modules/
+.vscode/
