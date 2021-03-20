@@ -47,6 +47,7 @@
             _readingListener = _readingErrorListener = null;
         };
         var callbackFailed = function (failed, error) {
+            console.error(error);
             if (_isScanning) {
                 finallyScan();
                 failed(error);
@@ -86,13 +87,14 @@
         };
 
         // define write function
-        _writefunc = function (validate, successful, failed) {
+        _writefunc = function (message, options, successful, failed) {
             if (_isScanning) {
                 setTimeout(function () {
                     failed(new Error('In use by another task.'));
                 }, 0);
                 return;
             }
+            var overwrite = options.overwrite || false;
             _isScanning = true;
             _ndef = new window.NDEFReader();
             _scanController = new AbortController();
@@ -100,41 +102,28 @@
                 callbackFailed(failed, new Error('Aborted writing NFC tag.'));
             };
             _readingErrorListener = function () {
-                callbackFailed(failed, new Error('Cannot validate data from the NFC tag.'));
+                callbackFailed(failed, new Error('Cannot write data to the NFC tag.'));
             };
             _readingListener = function (event) {
                 console.log(event);
-                var result = validate(event.serialNumber, event.message);
-                if (!result) {
-                    callbackFailed(failed, new Error('NFC tag validation failed.'));
-                } else {
-                    var message = result.message || null;
-                    var overwrite = !!(result.overwrite || false);
-                    finallyScan();
-                    _ndef = new window.NDEFReader();
-                    _scanController = new AbortController();
-                    _scanController.signal.onabort = function () {
-                        callbackFailed(failed, new Error('Aborted writing NFC tag.'));
-                    };
-                    _ndef
-                        .write(message, { overwrite: overwrite, signal: _scanController.signal })
-                        .then(function () {
-                            if (_isScanning) {
-                                _isScanning = false;
-                                finallyScan();
-                                successful();
-                            }
-                        })
-                        .catch(function (error) {
-                            callbackFailed(failed, error);
-                        });
-                }
             };
             _ndef.addEventListener('readingerror', _readingErrorListener);
             _ndef.addEventListener('reading', _readingListener);
-            _ndef.scan({ signal: _scanController.signal }).catch(function (error) {
-                callbackFailed(failed, error);
-            });
+            if (message === null) {
+                message = { records: [{ recordType: 'empty' }] };
+            }
+            _ndef
+                .write(message, { overwrite: overwrite, signal: _scanController.signal })
+                .then(function () {
+                    if (_isScanning) {
+                        _isScanning = false;
+                        finallyScan();
+                        successful();
+                    }
+                })
+                .catch(function (error) {
+                    callbackFailed(failed, error);
+                });
         };
     } else {
         _readfunc = function (successful, failed) {
@@ -142,7 +131,7 @@
                 failed(new Error('Web NFC is not supported.'));
             }, 0);
         };
-        _writefunc = function (validate, successful, failed) {
+        _writefunc = function (message, options, successful, failed) {
             setTimeout(function () {
                 failed(new Error('Web NFC is not supported.'));
             }, 0);
@@ -165,7 +154,8 @@
         read: _readfunc,
         /**
          * Start write NFC Tag.
-         * @param {function} validate Function called when validating NFC tags
+         * @param {function} message Message to write
+         * @param {function} options Write options
          * @param {function} successful Function called on success
          * @param {function} failed Function called on failure
          */
@@ -193,7 +183,7 @@
 
 function DataViewToString(dataview, isutf8) {
     var resultStr = '';
-    var datalen = dataview.byteLength;
+    var datalen = dataview ? dataview.byteLength : 0;
     for (var i = 0; i < datalen; i++) {
         var d = dataview.getUint8(i);
         resultStr += '%' + ('0' + d.toString(16)).slice(-2);
@@ -278,12 +268,8 @@ window.addEventListener('DOMContentLoaded', function () {
         document.getElementById('write_status').innerHTML = ' - Scanning...';
         document.getElementById('write_result').innerText = '';
         WebNFC.write(
-            function () {
-                return {
-                    message: document.getElementById('write_message').value,
-                    overwrite: !!document.getElementById('write_overwrite').checked,
-                };
-            },
+            document.getElementById('write_message').value || null,
+            { overwrite: !!document.getElementById('write_overwrite').checked },
             function () {
                 document.getElementById('write_status').innerHTML = ' - Write successful';
                 document.getElementById('write_result').innerText = '';
